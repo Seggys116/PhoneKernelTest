@@ -44,7 +44,7 @@ jobs:
     - name: Build kernel
       run: |
         cd kernel_build_script
-        python3 build_kernel.py --extra-local-version --create-boot-image
+        python3 build_kernel.py --extra-local-version --create-boot-image --with-docker-modules
       shell: bash
 
       
