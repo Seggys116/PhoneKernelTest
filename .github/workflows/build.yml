@@ -1,0 +1,137 @@
+name: Build GlowingKernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'main'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout this repo (for workflow files)
+      uses: actions/checkout@v4
+
+    - name: Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
+      with:
+        retain: "docker_imgcache,docker_buildkit,container_tools"
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
+
+    - name: Install packages
+      run: |
+        sudo apt update
+        sudo apt install -y git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils \
+        default-jdk git gnupg flex bison gperf build-essential zip curl libc6-dev libncurses-dev libx11-dev libreadline-dev libgl1 libgl1-mesa-dev \
+        python3 make sudo gcc g++ bc grep tofrodos python3-markdown libxml2-utils xsltproc zlib1g-dev python-is-python3 libc6-dev libtinfo6 \
+        make repo cpio kmod openssl libelf-dev pahole libssl-dev libarchive-tools zstd repo
+
+    - name: Clone Kernel
+      run: |
+        git clone https://github.com/ducthoe/kernel_build_script.git -b main-next
+        cd kernel_build_script
+        git submodule update --init --recursive
+      shell: bash
+      
+    - name: Build kernel
+      run: |
+        cd kernel_build_script
+        python3 build_kernel.py --extra-local-version --create-boot-image
+      shell: bash
+
+      
+    - name: Set Release Metadata
+      id: release_info
+      run: |
+          cd kernel_build_script
+          # Read metadata from prebuilts.json
+          KERNEL_DIR=$(jq -r '.Kernel_Source.target_dir_name' prebuilts.json)
+          CLANG_DIR=$(jq -r '.Toolchain.target_dir_name' prebuilts.json)
+          CLANG_BIN="../prebuilts/$CLANG_DIR/bin/clang"
+
+          MAKEFILE="../$KERNEL_DIR/Makefile"
+          VERSION=$(grep -m1 '^VERSION =' "$MAKEFILE" | awk '{print $3}')
+          PATCHLEVEL=$(grep -m1 '^PATCHLEVEL =' "$MAKEFILE" | awk '{print $3}')
+          SUBLEVEL=$(grep -m1 '^SUBLEVEL =' "$MAKEFILE" | awk '{print $3}')
+          KERNEL_VERSION="$VERSION.$PATCHLEVEL.$SUBLEVEL"
+
+          # Clang version
+          CLANG_VERSION=$($CLANG_BIN --version | head -n1 | sed 's/.*version //')
+
+          # Kernel commit hash
+          KERNEL_COMMIT=$(git -C "../$KERNEL_DIR" rev-parse --short HEAD)
+
+          echo "tag=$KERNEL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "kernel_version=$KERNEL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "clang=$CLANG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$KERNEL_COMMIT" >> "$GITHUB_OUTPUT"
+ 
+    - name: Clone AnyKernel3
+      run: |
+        git clone https://github.com/exynos1480-dev/AnyKernel3.git
+        cd AnyKernel3
+      shell: bash
+
+    - name: Copy Kernel Files to AnyKernel3
+      run: |
+        cd AnyKernel3
+        cp ../out/dist/Image Image
+      shell: bash
+
+    - name: Package Kernel with AnyKernel3
+      run: |
+        cd AnyKernel3
+        zip -r9 "GlowingKernel-V4-main-next-CI.zip" * -x .git README.md
+      shell: bash
+
+    - name: Upload Image artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Image-ZIP
+        path: out/dist/Image
+
+    - name: Upload Boot artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Boot-ZIP
+        path: out/dist/boot.img
+
+    - name: Determine Branch Type
+      id: branch_type
+      run: |
+        if [[ "main-next" == *"permissive"* ]]; then
+          echo "BRANCH_TYPE=Permissive" >> $GITHUB_ENV
+        else
+          echo "BRANCH_TYPE=Enforcing" >> $GITHUB_ENV
+        fi
+      shell: bash
+
+    - name: Upload AnyKernel package artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AnyKernel3-ZIP
+        path: AnyKernel3/GlowingKernel-V4-main-next-CI.zip
+
+    - name: Post build summary
+      run: |
+        {
+          echo "# GlowingKernel CI build";
+          echo;
+          echo "**Branch**: main-next";
+          echo "**Clang Version**: ${{ steps.release_info.outputs.clang }}";
+          echo "**Kernel**: ${{ steps.release_info.outputs.kernel_version }}";
+          echo "**Latest commit**: ${{ steps.release_info.outputs.commit }}";
+          echo "**Device**: Galaxy A55 5G";
+          echo "**SoC**: s5e8845 (Exynos 1480)";
+          echo;
+          echo "> NOTE: Don't use Enforcing builds on UI 8";
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
