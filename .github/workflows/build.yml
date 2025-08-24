@@ -36,7 +36,7 @@ jobs:
 
     - name: Clone Kernel
       run: |
-        git clone https://github.com/ducthoe/kernel_build_script.git -b main-next
+        git clone https://github.com/Seggys116/kernel_build_script.git -b main-next
         cd kernel_build_script
         git submodule update --init --recursive
       shell: bash
